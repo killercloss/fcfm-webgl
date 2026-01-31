@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { PointerLockControls } from "three/addons/controls/PointerLockControls.js";
 
-const HEIGHTMAP_URL = "./heightmap.png"; // <-- cambia aquí
+const HEIGHTMAP_URL = "https://raw.githubusercontent.com/killercloss/fcfm-webgl/refs/heads/main/Heightmap.png"; // <-- cambia aquí
 
 // --- Parámetros del terreno ---
 const HM_SIZE = 256;          // 256x256
