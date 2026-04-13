@@ -1,64 +1,101 @@
 import * as THREE from "three";
 import { PointerLockControls } from "three/addons/controls/PointerLockControls.js";
 
-const HEIGHTMAP_URL = "https://cdn.jsdelivr.net/gh/killercloss/fcfm-webgl/Heightmap.png"; // <-- cambia aquí
+const HEIGHTMAP_URL = "https://cdn.jsdelivr.net/gh/killercloss/fcfm-webgl/Heightmap.png";
 
 // --- Parámetros del terreno ---
-const HM_SIZE = 256;          // 256x256
-const TERRAIN_SIZE = 400;     // ancho/largo en unidades del mundo
-const HEIGHT_SCALE = 60;      // altura máxima del terreno (ajústalo)
-const BASE_Y = 0;             // offset base del terreno
-const WATER_Y = -5;           // opcional: nivel agua
+const HM_SIZE = 256;
+const TERRAIN_SIZE = 400;
+const HEIGHT_SCALE = 60;
+const BASE_Y = 0;
+const WATER_Y = -5;
 
 // --- Jugador ---
-const PLAYER_HEIGHT = 2.0;    // altura de cámara sobre el suelo
+const PLAYER_HEIGHT = 2.0;
 const GRAVITY = 25;
 const WALK_SPEED = 10;
 const RUN_SPEED = 18;
 const JUMP_VELOCITY = 10;
 
-// Renderer
-const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
-renderer.setSize(innerWidth, innerHeight);
-document.body.appendChild(renderer.domElement);
+// --- DOM ---
+const mount = document.getElementById("terrain-wrap");
+const blocker = document.getElementById("blocker");
 
-// Scene + Camera
+if (!mount) throw new Error('No existe #terrain-wrap');
+if (!blocker) throw new Error('No existe #blocker');
+
+// --- Renderer ---
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.domElement.style.display = "block";
+renderer.domElement.style.width = "100%";
+renderer.domElement.style.height = "100%";
+renderer.domElement.style.position = "absolute";
+renderer.domElement.style.top = "0";
+renderer.domElement.style.left = "0";
+mount.appendChild(renderer.domElement);
+
+// --- Scene ---
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0b0e14);
 
-const camera = new THREE.PerspectiveCamera(75, innerWidth / innerHeight, 0.1, 2000);
+// --- Camera ---
+const camera = new THREE.PerspectiveCamera(75, 1, 0.1, 2000);
 
-// Lights
-const hemi = new THREE.HemisphereLight(0xffffff, 0x223344, 0.9);
+// --- Lights ---
+const hemi = new THREE.HemisphereLight(0xffffff, 0x223344, 1.0);
 scene.add(hemi);
 
-const dir = new THREE.DirectionalLight(0xffffff, 1.0);
+const dir = new THREE.DirectionalLight(0xffffff, 1.2);
 dir.position.set(80, 120, 60);
-dir.castShadow = false;
 scene.add(dir);
 
-// Controls (FPS)
+// --- Controls ---
 const controls = new PointerLockControls(camera, renderer.domElement);
 scene.add(controls.getObject());
 
-const blocker = document.getElementById("blocker");
 blocker.addEventListener("click", () => controls.lock());
 controls.addEventListener("lock", () => blocker.classList.add("hidden"));
 controls.addEventListener("unlock", () => blocker.classList.remove("hidden"));
 
-// Input WASD
+// --- Input ---
 const keys = new Set();
-addEventListener("keydown", (e) => keys.add(e.code));
-addEventListener("keyup", (e) => keys.delete(e.code));
 
-// --- Util: carga heightmap y devuelve alturas normalizadas 0..1 ---
+window.addEventListener("keydown", (e) => {
+  keys.add(e.code);
+});
+
+window.addEventListener("keyup", (e) => {
+  keys.delete(e.code);
+});
+
+// --- Resize ---
+function getMountSize() {
+  const rect = mount.getBoundingClientRect();
+  return {
+    width: Math.max(1, Math.floor(rect.width)),
+    height: Math.max(1, Math.floor(rect.height))
+  };
+}
+
+function resizeRenderer() {
+  const { width, height } = getMountSize();
+  renderer.setSize(width, height, false);
+  camera.aspect = width / height;
+  camera.updateProjectionMatrix();
+}
+
+window.addEventListener("resize", resizeRenderer);
+resizeRenderer();
+
+// --- Heightmap loader ---
 async function loadHeightData(url, size) {
   const img = await new Promise((resolve, reject) => {
     const i = new Image();
     i.crossOrigin = "anonymous";
     i.onload = () => resolve(i);
-    i.onerror = reject;
+    i.onerror = () => reject(new Error("No se pudo cargar el heightmap: " + url));
     i.src = url;
   });
 
@@ -72,26 +109,26 @@ async function loadHeightData(url, size) {
   const { data } = ctx.getImageData(0, 0, size, size);
   const heights = new Float32Array(size * size);
 
-  // Luma aproximada (si viene en color también sirve)
   for (let i = 0; i < size * size; i++) {
     const r = data[i * 4 + 0];
     const g = data[i * 4 + 1];
     const b = data[i * 4 + 2];
-    const luma = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255; // 0..1
+    const luma = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
     heights[i] = luma;
   }
+
   return heights;
 }
 
-// --- Construye terreno desde alturas ---
+// --- Build terrain ---
 function buildTerrain(heights, size, worldSize, heightScale) {
-  const segs = size - 1; // 255 segments
+  const segs = size - 1;
   const geo = new THREE.PlaneGeometry(worldSize, worldSize, segs, segs);
   geo.rotateX(-Math.PI / 2);
 
   const pos = geo.attributes.position;
+
   for (let i = 0; i < pos.count; i++) {
-    // PlaneGeometry indexa vértices en orden fila-col
     const h = heights[i] * heightScale + BASE_Y;
     pos.setY(i, h);
   }
@@ -102,29 +139,30 @@ function buildTerrain(heights, size, worldSize, heightScale) {
   const mat = new THREE.MeshStandardMaterial({
     color: 0x3b7a57,
     roughness: 1.0,
-    metalness: 0.0,
+    metalness: 0.0
   });
 
   const mesh = new THREE.Mesh(geo, mat);
   mesh.receiveShadow = true;
+
   return { mesh, geo };
 }
 
-// --- Muestras de altura: bilinear sobre el heightmap ---
+// --- Bilinear height sample ---
 function sampleHeightBilinear(heights, size, xWorld, zWorld, worldSize, heightScale) {
-  // Convertir world x,z a UV 0..1 (asumiendo plano centrado en 0,0)
   const half = worldSize / 2;
-  const u = (xWorld + half) / worldSize;  // 0..1
-  const v = (zWorld + half) / worldSize;  // 0..1
 
-  // clamp fuera del terreno
+  const u = (xWorld + half) / worldSize;
+  const v = (zWorld + half) / worldSize;
+
   const uu = Math.min(1, Math.max(0, u));
   const vv = Math.min(1, Math.max(0, v));
 
   const x = uu * (size - 1);
   const y = vv * (size - 1);
 
-  const x0 = Math.floor(x), y0 = Math.floor(y);
+  const x0 = Math.floor(x);
+  const y0 = Math.floor(y);
   const x1 = Math.min(size - 1, x0 + 1);
   const y1 = Math.min(size - 1, y0 + 1);
 
@@ -148,59 +186,37 @@ function sampleHeightBilinear(heights, size, xWorld, zWorld, worldSize, heightSc
   return h * heightScale + BASE_Y;
 }
 
-// --- Main ---
+// --- State ---
 let heights = null;
-let terrain = null;
-
 let velocityY = 0;
 let onGround = false;
 
-(async function init() {
-  heights = await loadHeightData(HEIGHTMAP_URL, HM_SIZE);
-
-  const { mesh, geo } = buildTerrain(heights, HM_SIZE, TERRAIN_SIZE, HEIGHT_SCALE);
-  terrain = { mesh, geo };
-  scene.add(mesh);
-
-  // Agua simple (opcional)
-  const waterGeo = new THREE.PlaneGeometry(TERRAIN_SIZE, TERRAIN_SIZE, 1, 1);
-  waterGeo.rotateX(-Math.PI / 2);
-  const waterMat = new THREE.MeshStandardMaterial({ color: 0x234a7a, roughness: 0.2, metalness: 0.0, transparent: true, opacity: 0.55 });
-  const water = new THREE.Mesh(waterGeo, waterMat);
-  water.position.y = WATER_Y;
-  scene.add(water);
-
-  // Spawn: centro
-  controls.getObject().position.set(0, 20, 0);
-  animate();
-})();
-
-// Resize
-addEventListener("resize", () => {
-  camera.aspect = innerWidth / innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-});
-
-// Loop
 const clock = new THREE.Clock();
 
+// --- Main loop ---
 function animate() {
   requestAnimationFrame(animate);
+
   const dt = Math.min(0.033, clock.getDelta());
 
   if (heights && controls.isLocked) {
-    // Movimiento horizontal
-    const speed = keys.has("ShiftLeft") || keys.has("ShiftRight") ? RUN_SPEED : WALK_SPEED;
+    const speed =
+      keys.has("ShiftLeft") || keys.has("ShiftRight")
+        ? RUN_SPEED
+        : WALK_SPEED;
 
     const forward = new THREE.Vector3();
     controls.getDirection(forward);
     forward.y = 0;
     forward.normalize();
 
-    const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize().negate();
+    const right = new THREE.Vector3()
+      .crossVectors(forward, new THREE.Vector3(0, 1, 0))
+      .normalize()
+      .negate();
 
     const move = new THREE.Vector3();
+
     if (keys.has("KeyW")) move.add(forward);
     if (keys.has("KeyS")) move.sub(forward);
     if (keys.has("KeyD")) move.add(right);
@@ -211,11 +227,17 @@ function animate() {
       controls.getObject().position.add(move);
     }
 
-    // Gravedad + salto
     velocityY -= GRAVITY * dt;
 
     const p = controls.getObject().position;
-    const groundY = sampleHeightBilinear(heights, HM_SIZE, p.x, p.z, TERRAIN_SIZE, HEIGHT_SCALE);
+    const groundY = sampleHeightBilinear(
+      heights,
+      HM_SIZE,
+      p.x,
+      p.z,
+      TERRAIN_SIZE,
+      HEIGHT_SCALE
+    );
 
     const targetY = groundY + PLAYER_HEIGHT;
 
@@ -236,3 +258,45 @@ function animate() {
 
   renderer.render(scene, camera);
 }
+
+// --- Init ---
+async function init() {
+  try {
+    console.log("Cargando heightmap...");
+    heights = await loadHeightData(HEIGHTMAP_URL, HM_SIZE);
+    console.log("Heightmap cargado");
+
+    const { mesh } = buildTerrain(
+      heights,
+      HM_SIZE,
+      TERRAIN_SIZE,
+      HEIGHT_SCALE
+    );
+    scene.add(mesh);
+
+    const waterGeo = new THREE.PlaneGeometry(TERRAIN_SIZE, TERRAIN_SIZE, 1, 1);
+    waterGeo.rotateX(-Math.PI / 2);
+
+    const waterMat = new THREE.MeshStandardMaterial({
+      color: 0x234a7a,
+      roughness: 0.2,
+      metalness: 0.0,
+      transparent: true,
+      opacity: 0.55
+    });
+
+    const water = new THREE.Mesh(waterGeo, waterMat);
+    water.position.y = WATER_Y;
+    scene.add(water);
+
+    controls.getObject().position.set(0, 20, 0);
+
+    animate();
+  } catch (err) {
+    console.error("Error al inicializar:", err);
+    blocker.textContent = "Error al cargar el terreno. Revisa la consola.";
+    blocker.classList.remove("hidden");
+  }
+}
+
+init();
