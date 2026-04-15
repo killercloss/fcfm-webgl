@@ -250,10 +250,10 @@ function animate() {
       p.y += velocityY * dt;
     }
 
-    if (keys.has("Space") && onGround) {
+    /*if (keys.has("Space") && onGround) {
       velocityY = JUMP_VELOCITY;
       onGround = false;
-    }
+    }*/
   }
 
   renderer.render(scene, camera);
